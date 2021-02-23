@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Copyright 2020 Darren Weber
 #
@@ -65,3 +65,11 @@ aws-profile () {
     env | grep -E 'AWS_.*KEY' | sed -e '/KEY/s/\(.*=\).*\(.....\)$/\1...\2/'
     echo
 }
+
+_aws-profile-completions () {
+    profiles=$(sed -n -e 's/^\[\(.*\)\]$/\1/p' ~/.aws/credentials)
+    command_options="clear ${profiles}"
+    COMPREPLY=($(compgen -W "${command_options}" "${COMP_WORDS[1]}"))
+}
+
+complete -F _aws-profile-completions aws-profile
