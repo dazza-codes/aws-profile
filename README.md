@@ -38,3 +38,18 @@ region = us-east-1
 It will report the current settings, reset them using profile-name, or clear
 them.
 
+## Terraform Integration
+
+Note that if terraform scripts use a common variable like this:
+
+```terraform
+variable "aws_default_profile" {
+  default = "default"
+}
+```
+
+The `aws-profile` function is also setting a useful override for that variable, i.e.
+
+```shell
+export TF_VAR_aws_default_profile="${profile_name}"
+```
