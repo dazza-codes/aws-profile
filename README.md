@@ -7,10 +7,42 @@ See also:
 - https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html
 - https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html
 
-# Usage
+## Getting Started
 
-Source the script file (usually done by `~/.bashrc`) to have the function
-available in the current shell, where it can modify the env.
+Source the `aws_profile.sh` file in `~/.bashrc` or similar shell-init, such
+as copy the file to `/etc/profile.d/aws_profile.sh`.
+
+For example:
+
+```sh
+sudo curl -sSL https://raw.githubusercontent.com/dazza-codes/aws-profile/main/aws_profile.sh > /etc/profile.d/aws_profile.sh
+```
+
+For a user installation, use `~/bin/aws_profile.sh`.  For example:
+
+```sh
+mkdir -p  ~/bin
+curl -sSL https://raw.githubusercontent.com/dazza-codes/aws-profile/main/aws_profile.sh > ~/bin/aws_profile.sh
+```
+
+Ensure the shell init includes `~/bin/` in the `$PATH` (it often does already).
+Add the following to `~/.bashrc` (or similar shell init file).
+
+```sh
+if ! echo "$PATH" | grep -Eq "(^|:)${HOME}/bin($|:)"; then
+    export PATH="${HOME}/bin:${PATH}"
+fi
+
+if [ -f ~/bin/aws_profile.sh ]; then
+    source ~/bin/aws_profile.sh
+fi
+```
+
+## Usage
+
+When more than one AWS profile is needed, it's advised to avoid setting any `[default]` profile.
+By using `aws-profile`, it is easy to activate or switch between profiles by setting the
+required environment variables.
 
 ```bash
 source ./aws_profile.sh
