@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright 2020 Darren Weber
+# Copyright 2020-2022 Darren Weber
 #
 # Licensed under the Apache License, Version 2.0 (the "License"). You may not
 # use this file except in compliance with the License. A copy of the License is
@@ -45,7 +45,7 @@ aws-profile () {
         export AWS_SECRET_ACCESS_KEY
         export AWS_ACCOUNT
 
-    elif [ "$profile_name" == "clear" ]; then
+    elif [ "$profile_name" = "clear" ]; then
         echo "WARNING: clearing profile settings"
         unset AWS_DEFAULT_PROFILE
         unset AWS_DEFAULT_REGION
@@ -53,6 +53,7 @@ aws-profile () {
         unset AWS_ACCESS_KEY_ID
         unset AWS_SECRET_ACCESS_KEY
         unset TF_VAR_aws_default_profile
+
     else
         echo "WARNING: ${profile_name} is not available"
         echo "Available profiles:"
