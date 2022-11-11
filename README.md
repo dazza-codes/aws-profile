@@ -9,7 +9,10 @@ See also:
 
 ## Getting Started
 
-Source the `aws_profile.sh` file in `~/.bashrc` or similar shell-init, such
+Install [jq](https://stedolan.github.io/jq/download/).  It is used to query
+JSON outputs from AWS CLI.
+
+Source the `aws_profile.sh` file in `~/.bashrc`, `~/.zshrc` or similar shell-init, such
 as copy the file to `/etc/profile.d/aws_profile.sh`.
 
 For example:
@@ -49,18 +52,14 @@ source ./aws_profile.sh
 aws-profile [profile-name | clear]
 ```
 
-It manages the environment variables:
-
-```bash
-AWS_DEFAULT_REGION
-AWS_ACCESS_KEY_ID
-AWS_SECRET_ACCESS_KEY
-AWS_ACCOUNT
-```
-
-The values are drawn from `~/.aws/credentials`, which contains values like:
+The profiles are defined in `~/.aws/credentials`, e.g.:
 
 ```ini
+[default]
+aws_access_key_id = AWSAccessKeyID
+aws_secret_access_key = AWSSecretAccessKey
+region = us-east-1
+
 [profile-XX]
 aws_access_key_id = AWSAccessKeyID
 aws_secret_access_key = AWSSecretAccessKey
@@ -68,7 +67,31 @@ region = us-east-1
 ```
 
 It will report the current settings, reset them using profile-name, or clear
-them.
+them.  It assumes a `default` profile is defined, but it is not required.
+For example
+
+```shell
+
+$ aws-profile your-profile-name
+
+AWS_DEFAULT_PROFILE=your-profile-name
+AWS_DEFAULT_REGION=us-east-1
+AWS_ACCOUNT=999999999
+AWS_ACCESS_KEY_ID=...blahblah
+AWS_SECRET_ACCESS_KEY=...blahblah
+
+$ aws-role arn:aws:iam::999999999:role/your-aws-role
+
+Assuming role 'arn:aws:iam::999999999:role/your-aws-role'
+
+AWS_DEFAULT_PROFILE=your-profile-name
+AWS_DEFAULT_REGION=us-east-1
+AWS_ACCOUNT=999999999
+AWS_ROLE_SESSION_FILE=/tmp/aws-role-session-11972.json
+AWS_ACCESS_KEY_ID=...blahblah
+AWS_SECRET_ACCESS_KEY=...blahblah
+AWS_SESSION_TOKEN=...blahblah
+```
 
 ## Terraform Integration
 
