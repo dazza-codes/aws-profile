@@ -93,6 +93,39 @@ AWS_SECRET_ACCESS_KEY=...blahblah
 AWS_SESSION_TOKEN=...blahblah
 ```
 
+## AWS EKS Configuration
+
+This is an example of using bash (zsh) functions to manage EKS configurations.
+
+```bash
+#!/usr/bin/env bash
+
+# shellcheck disable=SC1090
+source ~/bin/aws_profile.sh
+
+aws-cluster-eks-kubeconfig () {
+
+        if [ "$AWS_DEFAULT_PROFILE" != "aws-cluster-eks-profile-e1" ]; then
+                aws-profile aws-cluster-eks-profile-e1
+        fi
+
+        ## If the update-kubeconfig below works, should not need to assume a role
+        #aws-role arn:aws:iam::999999999999:role/aws-cluster-eks-admin
+
+        if [ ! -s ~/.kube/aws-cluster-eks-config.yaml ]; then
+                aws eks update-kubeconfig \
+                        --name aws-cluster-eks-config \
+                        --alias aws-cluster-eks-config \
+                        --profile aws-cluster-eks-profile-e1 \
+                        --role-arn=arn:aws:iam::999999999999:role/aws-cluster-eks-admin \
+                        --kubeconfig ~/.kube/aws-cluster-eks-config.yaml  
+        fi
+        
+        export KUBECONFIG=~/.kube/aws-cluster-eks-config.yaml
+        kubectl config use-context aws-cluster-eks-config
+}
+```
+
 ## Terraform Integration
 
 Note that if terraform scripts use a common variable like this:
