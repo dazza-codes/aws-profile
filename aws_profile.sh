@@ -77,11 +77,16 @@ aws-profile() {
 		AWS_DEFAULT_REGION=$(aws configure --profile "$AWS_DEFAULT_PROFILE" get region)
 		AWS_ACCESS_KEY_ID=$(aws configure --profile "$AWS_DEFAULT_PROFILE" get aws_access_key_id)
 		AWS_SECRET_ACCESS_KEY=$(aws configure --profile "$AWS_DEFAULT_PROFILE" get aws_secret_access_key)
-		AWS_ACCOUNT=$(aws sts get-caller-identity | grep 'Account' | sed 's/[^0-9]//g')
+		AWS_SESSION_TOKEN=$(aws configure --profile "$AWS_DEFAULT_PROFILE" get aws_session_token)
 
 		export AWS_DEFAULT_REGION
 		export AWS_ACCESS_KEY_ID
 		export AWS_SECRET_ACCESS_KEY
+		if [[ -n "${AWS_SESSION_TOKEN}" ]]; then
+			export AWS_SESSION_TOKEN
+		fi
+
+		AWS_ACCOUNT=$(aws sts get-caller-identity | grep 'Account' | sed 's/[^0-9]//g')
 		export AWS_ACCOUNT
 
 	elif [ "$profile_name" = "clear" ]; then
