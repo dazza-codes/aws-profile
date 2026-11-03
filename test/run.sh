@@ -49,6 +49,7 @@ for shell in "$@"; do
 	esac
 
 	for test_file in "${root}"/test/*_test.sh; do
+		# shellcheck disable=SC2013
 		for test_name in $(sed -n 's/^\(test_[A-Za-z0-9_]*\)[[:space:]]*()[[:space:]]*{.*/\1/p' "$test_file"); do
 			if [ -n "$pattern" ] && ! echo "$test_name" | grep -q -- "$pattern"; then
 				continue

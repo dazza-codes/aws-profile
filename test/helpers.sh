@@ -37,7 +37,9 @@ load_script() {
 capture() {
 	"$@" >"$TEST_TMP/out" 2>"$TEST_TMP/err"
 	RC=$?
+	# shellcheck disable=SC2034
 	OUT=$(cat "$TEST_TMP/out")
+	# shellcheck disable=SC2034
 	ERR=$(cat "$TEST_TMP/err")
 }
 
