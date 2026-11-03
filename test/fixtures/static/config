@@ -1,0 +1,5 @@
+[default]
+region = us-east-1
+
+[profile static-a]
+region = us-west-2

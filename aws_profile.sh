@@ -24,11 +24,136 @@
 #
 #   - https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html
 #   - https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html
+#   - https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html
+#
+#   An SSO (IAM Identity Center) profile in ~/.aws/config is activated by
+#   setting AWS_PROFILE when its SSO session is valid; otherwise the static keys
+#   for the profile in ~/.aws/credentials are exported. Set
+#   AWS_PROFILE_DISABLE_SSO=1 to always use ~/.aws/credentials.
 #
 #   Source this script file in ~/.bashrc to have the function
 #   available in the current shell, where it can modify the env.
 
 unset _AWS_SUPPRESS_ENV
+
+_aws-profile-credentials-file() {
+	echo "${AWS_SHARED_CREDENTIALS_FILE:-$HOME/.aws/credentials}"
+}
+
+_aws-profile-config-file() {
+	echo "${AWS_CONFIG_FILE:-$HOME/.aws/config}"
+}
+
+# Profile names from the credentials file, then any others from the config file.
+_aws-profile-list() {
+	{
+		sed -n -e 's/^\[\(.*\)\]$/\1/p' "$(_aws-profile-credentials-file)" 2>/dev/null
+		sed -n -e 's/^\[profile \(.*\)\]$/\1/p' -e 's/^\[default\]$/default/p' "$(_aws-profile-config-file)" 2>/dev/null
+	} | awk '!seen[$0]++'
+}
+
+_aws-profile-in-credentials() {
+	grep -q "\[${1}\]" "$(_aws-profile-credentials-file)" 2>/dev/null
+}
+
+_aws-profile-is-sso() {
+	local profile_name=$1
+	local config_file
+	config_file=$(_aws-profile-config-file)
+
+	# Each `aws configure get` costs a CLI startup, so skip profiles that have no
+	# config section and cannot be SSO profiles.
+	if ! grep -qFx "[profile ${profile_name}]" "$config_file" 2>/dev/null; then
+		if [[ "$profile_name" != "default" ]] || ! grep -qFx "[default]" "$config_file" 2>/dev/null; then
+			return 1
+		fi
+	fi
+
+	[[ -n "$(aws configure get sso_session --profile "$profile_name" 2>/dev/null)" ]] ||
+		[[ -n "$(aws configure get sso_start_url --profile "$profile_name" 2>/dev/null)" ]]
+}
+
+# Prints the activation mode for a profile: sso, static or none. It also sets
+# _AWS_PROFILE_MODE and, for sso, _AWS_PROFILE_SSO_IDENTITY, so aws-profile can
+# call it without a subshell and reuse the identity lookup.
+_aws-profile-resolve-mode() {
+	local profile_name=$1
+	local identity credentials_label
+
+	_AWS_PROFILE_MODE=none
+	_AWS_PROFILE_SSO_IDENTITY=""
+
+	if [[ -z "${AWS_PROFILE_DISABLE_SSO:-}" ]] && _aws-profile-is-sso "$profile_name"; then
+		if identity=$(aws sts get-caller-identity --profile "$profile_name" 2>/dev/null); then
+			_AWS_PROFILE_MODE=sso
+			_AWS_PROFILE_SSO_IDENTITY=$identity
+		elif _aws-profile-in-credentials "$profile_name"; then
+			_AWS_PROFILE_MODE=static
+			# shellcheck disable=SC2088
+			credentials_label='~/.aws/credentials'
+			if [[ -n "${AWS_SHARED_CREDENTIALS_FILE:-}" ]]; then
+				credentials_label=$AWS_SHARED_CREDENTIALS_FILE
+			fi
+			echo "SSO session for ${profile_name} unavailable; falling back to ${credentials_label}." >&2
+			echo "Run: aws sso login --profile ${profile_name}" >&2
+		else
+			echo "SSO session for ${profile_name} unavailable." >&2
+			echo "Run: aws sso login --profile ${profile_name}" >&2
+			echo "${_AWS_PROFILE_MODE}"
+			return 1
+		fi
+	elif _aws-profile-in-credentials "$profile_name"; then
+		_AWS_PROFILE_MODE=static
+	fi
+
+	echo "${_AWS_PROFILE_MODE}"
+}
+
+_aws-profile-activate-static() {
+	local profile_name=$1
+
+	aws-env-clear
+
+	export AWS_DEFAULT_PROFILE="${profile_name}"
+	export TF_VAR_aws_default_profile="${profile_name}" # for terraform
+
+	AWS_DEFAULT_REGION=$(aws configure --profile "$AWS_DEFAULT_PROFILE" get region)
+	AWS_ACCESS_KEY_ID=$(aws configure --profile "$AWS_DEFAULT_PROFILE" get aws_access_key_id)
+	AWS_SECRET_ACCESS_KEY=$(aws configure --profile "$AWS_DEFAULT_PROFILE" get aws_secret_access_key)
+	AWS_SESSION_TOKEN=$(aws configure --profile "$AWS_DEFAULT_PROFILE" get aws_session_token)
+
+	export AWS_DEFAULT_REGION
+	export AWS_ACCESS_KEY_ID
+	export AWS_SECRET_ACCESS_KEY
+	if [[ -n "${AWS_SESSION_TOKEN}" ]]; then
+		export AWS_SESSION_TOKEN
+	fi
+
+	AWS_ACCOUNT=$(aws sts get-caller-identity | grep 'Account' | sed 's/[^0-9]//g')
+	export AWS_ACCOUNT
+}
+
+# No keys are exported: the CLI and SDKs resolve and refresh SSO credentials
+# from AWS_PROFILE themselves.
+_aws-profile-activate-sso() {
+	local profile_name=$1
+	local identity=${2:-}
+
+	aws-env-clear
+
+	export AWS_PROFILE="${profile_name}"
+	export AWS_DEFAULT_PROFILE="${profile_name}"
+	export TF_VAR_aws_default_profile="${profile_name}" # for terraform
+
+	AWS_DEFAULT_REGION=$(aws configure --profile "$AWS_DEFAULT_PROFILE" get region)
+	export AWS_DEFAULT_REGION
+
+	if [[ -z "${identity}" ]]; then
+		identity=$(aws sts get-caller-identity --profile "$AWS_DEFAULT_PROFILE")
+	fi
+	AWS_ACCOUNT=$(printf '%s\n' "${identity}" | grep 'Account' | sed 's/[^0-9]//g')
+	export AWS_ACCOUNT
+}
 
 aws-env() {
 	if [[ -z "${_AWS_SUPPRESS_ENV}" ]]; then
@@ -42,6 +167,7 @@ aws-env() {
 
 aws-env-clear() {
 	unset AWS_ACCOUNT
+	unset AWS_PROFILE
 	unset AWS_DEFAULT_PROFILE
 	unset AWS_DEFAULT_REGION
 	unset AWS_ACCESS_KEY_ID
@@ -66,42 +192,38 @@ aws-env-clear-role() {
 }
 
 aws-profile() {
-	profile_name=${1:-default}
-	if grep -q "\[${profile_name}\]" ~/.aws/credentials; then
+	local profile_name=${1:-default}
+	local rc=0
 
-		aws-env-clear
-
-		export AWS_DEFAULT_PROFILE="${profile_name}"
-		export TF_VAR_aws_default_profile="${profile_name}" # for terraform
-
-		AWS_DEFAULT_REGION=$(aws configure --profile "$AWS_DEFAULT_PROFILE" get region)
-		AWS_ACCESS_KEY_ID=$(aws configure --profile "$AWS_DEFAULT_PROFILE" get aws_access_key_id)
-		AWS_SECRET_ACCESS_KEY=$(aws configure --profile "$AWS_DEFAULT_PROFILE" get aws_secret_access_key)
-		AWS_SESSION_TOKEN=$(aws configure --profile "$AWS_DEFAULT_PROFILE" get aws_session_token)
-
-		export AWS_DEFAULT_REGION
-		export AWS_ACCESS_KEY_ID
-		export AWS_SECRET_ACCESS_KEY
-		if [[ -n "${AWS_SESSION_TOKEN}" ]]; then
-			export AWS_SESSION_TOKEN
-		fi
-
-		AWS_ACCOUNT=$(aws sts get-caller-identity | grep 'Account' | sed 's/[^0-9]//g')
-		export AWS_ACCOUNT
-
-	elif [ "$profile_name" = "clear" ]; then
+	if [ "$profile_name" = "clear" ]; then
 		echo "WARNING: clearing profile settings"
 		aws-env-clear
 
 	else
-		echo "WARNING: ${profile_name} is not available"
-		echo "Available profiles:"
-		sed -n -e 's/^\[\(.*\)\]$/\1/p' ~/.aws/credentials
-		echo "'clear' will unset any current active profile"
-		echo "'default' is used when no profile is specified"
+		_aws-profile-resolve-mode "${profile_name}" >/dev/null || rc=1
+
+		case "${_AWS_PROFILE_MODE}" in
+		sso)
+			_aws-profile-activate-sso "${profile_name}" "${_AWS_PROFILE_SSO_IDENTITY}"
+			;;
+		static)
+			_aws-profile-activate-static "${profile_name}"
+			;;
+		*)
+			if [[ $rc -eq 0 ]]; then
+				echo "WARNING: ${profile_name} is not available"
+				echo "Available profiles:"
+				_aws-profile-list
+				echo "'clear' will unset any current active profile"
+				echo "'default' is used when no profile is specified"
+			fi
+			;;
+		esac
+		unset _AWS_PROFILE_MODE _AWS_PROFILE_SSO_IDENTITY
 	fi
 
 	aws-env
+	return $rc
 }
 
 aws-role() {
@@ -125,10 +247,13 @@ aws-role() {
 	if [[ -n "${AWS_DEFAULT_PROFILE}" ]]; then
 		# reset the env-vars for the active profile
 		export _AWS_SUPPRESS_ENV=true
-		aws-profile "${AWS_DEFAULT_PROFILE}"
+		if ! aws-profile "${AWS_DEFAULT_PROFILE}"; then
+			unset _AWS_SUPPRESS_ENV
+			return 1
+		fi
 		unset _AWS_SUPPRESS_ENV
 	else
-		if ! grep -q "\[default\]" ~/.aws/credentials; then
+		if ! _aws-profile-in-credentials default && ! _aws-profile-is-sso default; then
 			echo "There is no active profile that can assume any role"
 			return 1
 		fi
@@ -160,9 +285,12 @@ aws-role() {
 }
 
 _aws-profile-completions() {
-	profiles=$(sed -n -e 's/^\[\(.*\)\]$/\1/p' ~/.aws/credentials)
+	profiles=$(_aws-profile-list)
 	command_options="clear ${profiles}"
 	COMPREPLY=($(compgen -W "${command_options}" "${COMP_WORDS[1]}"))
 }
 
-complete -F _aws-profile-completions aws-profile
+# zsh only has `complete` after `autoload -U bashcompinit && bashcompinit`.
+if command -v complete >/dev/null 2>&1; then
+	complete -F _aws-profile-completions aws-profile
+fi

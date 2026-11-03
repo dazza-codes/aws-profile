@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+#
+# Test double for the AWS CLI. Answers from the fixture config and credentials
+# files and never touches the network.
+#
+#   STUB_LOG           file that receives one line per invocation (the args)
+#   STUB_SSO_SESSIONS  space-separated profile names whose SSO session is valid
+#
+# Access keys starting with EXPIRED are rejected like an invalid token; keys
+# starting with ASIAROLE are the ones returned by `sts assume-role`.
+# A role ARN containing "denied" fails to assume.
+
+set -u
+
+if [[ -n "${STUB_LOG:-}" ]]; then
+	printf '%s\n' "$*" >>"${STUB_LOG}"
+fi
+
+config_file=${AWS_CONFIG_FILE:-$HOME/.aws/config}
+credentials_file=${AWS_SHARED_CREDENTIALS_FILE:-$HOME/.aws/credentials}
+
+ini_get() {
+	local file=$1 section=$2 key=$3
+	[[ -f "$file" ]] || return 1
+	awk -v sec="$section" -v key="$key" '
+		/^[ \t]*\[/ {
+			s = $0
+			gsub(/^[ \t]*\[[ \t]*|[ \t]*\][ \t]*$/, "", s)
+			insec = (s == sec)
+			next
+		}
+		insec {
+			i = index($0, "=")
+			if (i == 0) next
+			k = substr($0, 1, i - 1)
+			v = substr($0, i + 1)
+			gsub(/^[ \t]+|[ \t]+$/, "", k)
+			gsub(/^[ \t]+|[ \t]+$/, "", v)
+			if (k == key) { print v; found = 1; exit }
+		}
+		END { exit !found }
+	' "$file"
+}
+
+profile_get() {
+	local profile=$1 key=$2
+	ini_get "$credentials_file" "$profile" "$key" && return 0
+	if [[ "$profile" == default ]]; then
+		ini_get "$config_file" default "$key" && return 0
+	fi
+	ini_get "$config_file" "profile $profile" "$key"
+}
+
+profile=""
+role_arn=""
+args=()
+while (($#)); do
+	case $1 in
+	--profile) profile=$2; shift 2 ;;
+	--profile=*) profile=${1#*=}; shift ;;
+	--role-arn) role_arn=$2; shift 2 ;;
+	--role-arn=*) role_arn=${1#*=}; shift ;;
+	--role-session-name) shift 2 ;;
+	--role-session-name=*) shift ;;
+	*) args+=("$1"); shift ;;
+	esac
+done
+
+effective_profile() {
+	echo "${profile:-${AWS_DEFAULT_PROFILE:-${AWS_PROFILE:-default}}}"
+}
+
+account=""
+arn=""
+
+check_key() {
+	case $1 in
+	EXPIRED*)
+		echo "An error occurred (InvalidClientTokenId) when calling the GetCallerIdentity operation: The security token included in the request is invalid." >&2
+		return 254
+		;;
+	ASIAROLE*)
+		account=333333333333
+		arn="arn:aws:sts::333333333333:assumed-role/stub-role/aws-role-session"
+		;;
+	*)
+		account=111111111111
+		arn="arn:aws:iam::111111111111:user/stub-user"
+		;;
+	esac
+}
+
+# Mirrors the CLI credential chain: an explicit --profile ignores env keys,
+# and an SSO profile never falls through to the credentials file.
+resolve_credentials() {
+	if [[ -z "$profile" && -n "${AWS_ACCESS_KEY_ID:-}" ]]; then
+		check_key "$AWS_ACCESS_KEY_ID"
+		return
+	fi
+	local p key
+	p=$(effective_profile)
+	if profile_get "$p" sso_session >/dev/null || profile_get "$p" sso_start_url >/dev/null; then
+		if [[ " ${STUB_SSO_SESSIONS:-} " == *" $p "* ]]; then
+			account=222222222222
+			arn="arn:aws:sts::222222222222:assumed-role/AWSReservedSSO_Dev_0123456789abcdef/sso-user"
+			return 0
+		fi
+		echo "Error when retrieving token from sso: Token has expired and refresh failed" >&2
+		return 255
+	fi
+	if ! key=$(profile_get "$p" aws_access_key_id); then
+		echo "Unable to locate credentials. You can configure credentials by running \"aws configure\"." >&2
+		return 253
+	fi
+	check_key "$key"
+}
+
+case "${args[*]:-}" in
+"configure get "*)
+	key=${args[2]}
+	p=$(effective_profile)
+	if [[ "$p" != default ]] &&
+		! grep -qFx "[$p]" "$credentials_file" 2>/dev/null &&
+		! grep -qFx "[profile $p]" "$config_file" 2>/dev/null; then
+		echo "aws: [ERROR]: The config profile ($p) could not be found" >&2
+		exit 255
+	fi
+	profile_get "$p" "$key" || exit 1
+	;;
+"sts get-caller-identity")
+	resolve_credentials || exit $?
+	cat <<-EOF
+		{
+		    "UserId": "AIDASTUBUSERID",
+		    "Account": "${account}",
+		    "Arn": "${arn}"
+		}
+	EOF
+	;;
+"sts assume-role")
+	resolve_credentials || exit $?
+	if [[ "$role_arn" == *denied* ]]; then
+		echo "An error occurred (AccessDenied) when calling the AssumeRole operation: not authorized to assume ${role_arn}" >&2
+		exit 254
+	fi
+	cat <<-EOF
+		{
+		    "Credentials": {
+		        "AccessKeyId": "ASIAROLE0000000001",
+		        "SecretAccessKey": "rolesecret0000000001",
+		        "SessionToken": "rolesessiontoken0001",
+		        "Expiration": "2026-11-03T23:00:00+00:00"
+		    },
+		    "AssumedRoleUser": {
+		        "AssumedRoleId": "AROASTUB:aws-role-session",
+		        "Arn": "arn:aws:sts::333333333333:assumed-role/stub-role/aws-role-session"
+		    }
+		}
+	EOF
+	;;
+*)
+	echo "aws stub: unsupported command: $*" >&2
+	exit 2
+	;;
+esac
